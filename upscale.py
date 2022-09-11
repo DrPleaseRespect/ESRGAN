@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import argparse
 import logging
 import sys
 from collections import OrderedDict
@@ -11,10 +12,6 @@ from typing import List, Optional, Union
 import cv2
 import numpy as np
 import torch
-import typer
-from rich import print
-from rich.logging import RichHandler
-from rich.progress import BarColumn, Progress, TaskID, TimeRemainingColumn
 
 import utils.dataops as ops
 from utils.architecture.RRDB import RRDBNet as ESRGAN
@@ -155,6 +152,7 @@ class Upscale:
             )
         )
 
+
         images: List[Path] = []
         for ext in ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "tga"]:
             images.extend(self.input.glob(f"**/*.{ext}"))
@@ -163,91 +161,73 @@ class Upscale:
         # TODO: there might be a better way of doing this but it's good enough for now
         split_depths = {}
 
-        with Progress(
-            # SpinnerColumn(),
-            "[progress.description]{task.description}",
-            BarColumn(),
-            "[progress.percentage]{task.percentage:>3.0f}%",
-            TimeRemainingColumn(),
-        ) as progress:
-            task_upscaling = progress.add_task("Upscaling", total=len(images))
-            for idx, img_path in enumerate(images, 1):
-                img_input_path_rel = img_path.relative_to(self.input)
-                output_dir = self.output.joinpath(img_input_path_rel).parent
-                img_output_path_rel = output_dir.joinpath(f"{img_path.stem}.png")
-                output_dir.mkdir(parents=True, exist_ok=True)
-                if len(model_chain) == 1:
-                    self.log.info(
-                        f'Processing {str(idx).zfill(len(str(len(images))))}: "{img_input_path_rel}"'
-                    )
-                if self.skip_existing and img_output_path_rel.is_file():
-                    self.log.warning("Already exists, skipping")
-                    if self.delete_input:
-                        img_path.unlink(missing_ok=True)
-                    progress.advance(task_upscaling)
-                    continue
-                # read image
-                img = cv2.imread(str(img_path.absolute()), cv2.IMREAD_UNCHANGED)
-                if len(img.shape) < 3:
-                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-
-                # Seamless modes
-                if self.seamless == SeamlessOptions.TILE:
-                    img = cv2.copyMakeBorder(img, 16, 16, 16, 16, cv2.BORDER_WRAP)
-                elif self.seamless == SeamlessOptions.MIRROR:
-                    img = cv2.copyMakeBorder(
-                        img, 16, 16, 16, 16, cv2.BORDER_REFLECT_101
-                    )
-                elif self.seamless == SeamlessOptions.REPLICATE:
-                    img = cv2.copyMakeBorder(img, 16, 16, 16, 16, cv2.BORDER_REPLICATE)
-                elif self.seamless == SeamlessOptions.ALPHA_PAD:
-                    img = cv2.copyMakeBorder(
-                        img, 16, 16, 16, 16, cv2.BORDER_CONSTANT, value=[0, 0, 0, 0]
-                    )
-                final_scale: int = 1
-
-                task_model_chain: TaskID = None
-                if len(model_chain) > 1:
-                    task_model_chain = progress.add_task(
-                        f'{str(idx).zfill(len(str(len(images))))} - "{img_input_path_rel}"',
-                        total=len(model_chain),
-                    )
-                for i, model_path in enumerate(model_chain):
-
-                    img_height, img_width = img.shape[:2]
-
-                    # Load the model so we can access the scale
-                    self.load_model(model_path)
-
-                    if self.cache_max_split_depth and len(split_depths.keys()) > 0:
-                        rlt, depth = ops.auto_split_upscale(
-                            img,
-                            self.upscale,
-                            self.last_scale,
-                            max_depth=split_depths[i],
-                        )
-                    else:
-                        rlt, depth = ops.auto_split_upscale(
-                            img, self.upscale, self.last_scale
-                        )
-                        split_depths[i] = depth
-
-                    final_scale *= self.last_scale
-
-                    # This is for model chaining
-                    img = rlt.astype("uint8")
-                    if len(model_chain) > 1:
-                        progress.advance(task_model_chain)
-
-                if self.seamless:
-                    rlt = self.crop_seamless(rlt, final_scale)
-
-                cv2.imwrite(str(img_output_path_rel.absolute()), rlt)
-
+        for idx, img_path in enumerate(images, 1):
+            img_input_path_rel = img_path.relative_to(self.input)
+            output_dir = self.output.joinpath(img_input_path_rel).parent
+            img_output_path_rel = output_dir.joinpath(f"{img_path.stem}.png")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if len(model_chain) == 1:
+                self.log.info(
+                    f'Processing... {str(idx).zfill(len(str(len(images))))}: "{img_input_path_rel}"'
+                )
+            if self.skip_existing and img_output_path_rel.is_file():
+                self.log.warning("Already exists, skipping")
                 if self.delete_input:
                     img_path.unlink(missing_ok=True)
+                continue
+            # read image
+            img = cv2.imread(str(img_path.absolute()), cv2.IMREAD_UNCHANGED)
+            if len(img.shape) < 3:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-                progress.advance(task_upscaling)
+            # Seamless modes
+            if self.seamless == SeamlessOptions.TILE:
+                img = cv2.copyMakeBorder(img, 16, 16, 16, 16, cv2.BORDER_WRAP)
+            elif self.seamless == SeamlessOptions.MIRROR:
+                img = cv2.copyMakeBorder(
+                    img, 16, 16, 16, 16, cv2.BORDER_REFLECT_101
+                )
+            elif self.seamless == SeamlessOptions.REPLICATE:
+                img = cv2.copyMakeBorder(img, 16, 16, 16, 16, cv2.BORDER_REPLICATE)
+            elif self.seamless == SeamlessOptions.ALPHA_PAD:
+                img = cv2.copyMakeBorder(
+                    img, 16, 16, 16, 16, cv2.BORDER_CONSTANT, value=[0, 0, 0, 0]
+                )
+            final_scale: int = 1
+
+            for i, model_path in enumerate(model_chain):
+
+                img_height, img_width = img.shape[:2]
+
+                # Load the model so we can access the scale
+                self.load_model(model_path)
+
+                if self.cache_max_split_depth and len(split_depths.keys()) > 0:
+                    rlt, depth, _ = ops.auto_split_upscale(
+                        img,
+                        self.upscale,
+                        self.last_scale,
+                        max_depth=split_depths[i],
+                    )
+                else:
+                    rlt, depth, _ = ops.auto_split_upscale(
+                        img, self.upscale, self.last_scale
+                    )
+                    split_depths[i] = depth
+
+                final_scale *= self.last_scale
+
+                # This is for model chaining
+                img = rlt.astype("uint8")
+
+            if self.seamless:
+                rlt = self.crop_seamless(rlt, final_scale)
+
+            cv2.imwrite(str(img_output_path_rel.absolute()), rlt)
+
+            if self.delete_input:
+                img_path.unlink(missing_ok=True)
+
 
     def __check_model_path(self, model_path: str) -> str:
         if Path(model_path).is_file():
@@ -456,116 +436,65 @@ class Upscale:
         return img
 
 
-app = typer.Typer()
 
 
-@app.command()
-def main(
-    model: str = typer.Argument(...),
-    input: Path = typer.Option(Path("input"), "--input", "-i", help="Input folder"),
-    output: Path = typer.Option(Path("output"), "--output", "-o", help="Output folder"),
-    reverse: bool = typer.Option(False, "--reverse", "-r", help="Reverse Order"),
-    skip_existing: bool = typer.Option(
-        False,
-        "--skip-existing",
-        "-se",
-        help="Skip existing output files",
-    ),
-    delete_input: bool = typer.Option(
-        False,
-        "--delete-input",
-        "-di",
-        help="Delete input files after upscaling",
-    ),
-    seamless: SeamlessOptions = typer.Option(
-        None,
-        "--seamless",
-        "-s",
-        case_sensitive=False,
-        help="Helps seamlessly upscale an image. tile = repeating along edges. mirror = reflected along edges. replicate = extended pixels along edges. alpha_pad = extended alpha border.",
-    ),
-    cpu: bool = typer.Option(False, "--cpu", "-c", help="Use CPU instead of CUDA"),
-    fp16: bool = typer.Option(
-        False,
-        "--floating-point-16",
-        "-fp16",
-        help="Use FloatingPoint16/Halftensor type for images.",
-    ),
-    device_id: int = typer.Option(
-        0, "--device-id", "-did", help="The numerical ID of the GPU you want to use."
-    ),
-    cache_max_split_depth: bool = typer.Option(
-        False,
-        "--cache-max-split-depth",
-        "-cmsd",
-        help="Caches the maximum recursion depth used by the split/merge function. Useful only when upscaling images of the same size.",
-    ),
-    binary_alpha: bool = typer.Option(
-        False,
-        "--binary-alpha",
-        "-ba",
-        help="Whether to use a 1 bit alpha transparency channel, Useful for PSX upscaling",
-    ),
-    ternary_alpha: bool = typer.Option(
-        False,
-        "--ternary-alpha",
-        "-ta",
-        help="Whether to use a 2 bit alpha transparency channel, Useful for PSX upscaling",
-    ),
-    alpha_threshold: float = typer.Option(
-        0.5,
-        "--alpha-threshold",
-        "-at",
-        help="Only used when binary_alpha is supplied. Defines the alpha threshold for binary transparency",
-    ),
-    alpha_boundary_offset: float = typer.Option(
-        0.2,
-        "--alpha-boundary-offset",
-        "-abo",
-        help="Only used when binary_alpha is supplied. Determines the offset boundary from the alpha threshold for half transparency.",
-    ),
-    alpha_mode: AlphaOptions = typer.Option(
-        None,
-        "--alpha-mode",
-        "-am",
-        help="Type of alpha processing to use. no_alpha = is no alpha processing. bas = is BA's difference method. alpha_separately = is upscaling the alpha channel separately (like IEU). swapping = is swapping an existing channel with the alpha channel.",
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Verbose mode",
-    ),
-):
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('model')
+    parser.add_argument('--input', default='input', help='Input folder', type=Path)
+    parser.add_argument('--output', default='output', help='Output folder', type=Path)
+    parser.add_argument('--reverse', help='Reverse Order', action="store_true")
+    parser.add_argument('--skip_existing', action="store_true",
+                        help='Skip existing output files')
+    parser.add_argument('--seamless', nargs='?', choices=['tile', 'mirror', 'replicate', 'alpha_pad'], default=None,
+                        help='Helps seamlessly upscale an image. Tile = repeating along edges. Mirror = reflected along edges. Replicate = extended pixels along edges. Alpha pad = extended alpha border.')
+    parser.add_argument('--cpu', action='store_true',
+                        help='Use CPU instead of CUDA')
+    parser.add_argument('--device_id', help='The numerical ID of the GPU you want to use. Defaults to 0.',
+                        type=int, nargs='?', default=0)
+    parser.add_argument('--fp16', action='store_true',
+                        help='Use FloatingPoint16/Halftensor type for images')
+    parser.add_argument('--cache_max_split_depth', action='store_true',
+                        help='Caches the maximum recursion depth used by the split/merge function. Useful only when upscaling images of the same size.')
+    parser.add_argument('--binary_alpha', action='store_true',
+                        help='Whether to use a 1 bit alpha transparency channel, Useful for PSX upscaling')
+    parser.add_argument('--ternary_alpha', action='store_true',
+                        help='Whether to use a 2 bit alpha transparency channel, Useful for PSX upscaling')
+    parser.add_argument('--alpha_threshold', default=.5,
+                        help='Only used when binary_alpha is supplied. Defines the alpha threshold for binary transparency', type=float)
+    parser.add_argument('--alpha_boundary_offset', default=.2,
+                        help='Only used when binary_alpha is supplied. Determines the offset boundary from the alpha threshold for half transparency.', type=float)
+    parser.add_argument('--alpha_mode', help='Type of alpha processing to use. 0 is no alpha processing. 1 is BA\'s difference method. 2 is upscaling the alpha channel separately (like IEU). 3 is swapping an existing channel with the alpha channel.',
+                        type=int, nargs='?', choices=[0, 1, 2, 3], default=0)
+    args = parser.parse_args()
+
 
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.WARNING,
+        level=logging.DEBUG,
         format="%(message)s",
-        datefmt="[%X]",
-        handlers=[RichHandler(markup=True)],
+        filename="prog",
+        filemode="w",
+        #datefmt="[%X]",
+        #handlers=[RichHandler(markup=True)],
         # handlers=[RichHandler(markup=True, rich_tracebacks=True)],
     )
 
     upscale = Upscale(
-        model=model,
-        input=input,
-        output=output,
-        reverse=reverse,
-        skip_existing=skip_existing,
-        delete_input=delete_input,
-        seamless=seamless,
-        cpu=cpu,
-        fp16=fp16,
-        device_id=device_id,
-        cache_max_split_depth=cache_max_split_depth,
-        binary_alpha=binary_alpha,
-        ternary_alpha=ternary_alpha,
-        alpha_threshold=alpha_threshold,
-        alpha_boundary_offset=alpha_boundary_offset,
-        alpha_mode=alpha_mode,
+        model=args.model,
+        input=args.input,
+        output=args.output,
+        reverse=args.reverse,
+        skip_existing=args.skip_existing,
+        delete_input=False,
+        seamless=args.seamless,
+        cpu=args.cpu,
+        fp16=args.fp16,
+        device_id=args.device_id,
+        cache_max_split_depth=args.cache_max_split_depth,
+        binary_alpha=args.binary_alpha,
+        ternary_alpha=args.ternary_alpha,
+        alpha_threshold=args.alpha_threshold,
+        alpha_boundary_offset=args.alpha_boundary_offset,
+        alpha_mode=args.alpha_mode,
     )
     upscale.run()
-
-
-if __name__ == "__main__":
-    app()

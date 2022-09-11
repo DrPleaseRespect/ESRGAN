@@ -5,7 +5,9 @@ import gc
 
 import numpy as np
 import torch
+import logging
 
+logging.basicConfig(level=logging.DEBUG, filename="prog", filemode="w", format="%(message)s")
 
 def bgr_to_rgb(image: torch.Tensor) -> torch.Tensor:
     # flip image channels
@@ -37,13 +39,16 @@ def auto_split_upscale(
     overlap: int = 32,
     max_depth: int = None,
     current_depth: int = 1,
+    current_tile_num: int = 1
 ):
 
     # Attempt to upscale if unknown depth or if reached known max depth
     if max_depth is None or max_depth == current_depth:
         try:
             result = upscale_function(lr_img)
-            return result, current_depth
+            print(f'Tile {current_tile_num}/{4 ** (max_depth-1) if max_depth is not None else 4 ** (current_depth-1)}')
+            logging.info("Tile %d/%d" % (current_tile_num, (4 ** (max_depth-1) if max_depth is not None else 4 ** (current_depth-1))))
+            return result, current_depth, current_tile_num+1
         except RuntimeError as e:
             # Check to see if its actually the CUDA out of memory error
             if "CUDA" in str(e):
@@ -64,37 +69,41 @@ def auto_split_upscale(
 
     # Recursively upscale the quadrants
     # After we go through the top left quadrant, we know the maximum depth and no longer need to test for out-of-memory
-    top_left_rlt, depth = auto_split_upscale(
+    top_left_rlt, depth, current_tile_num = auto_split_upscale(
         top_left,
         upscale_function,
         scale=scale,
         overlap=overlap,
         max_depth=max_depth,
         current_depth=current_depth + 1,
+        current_tile_num=current_tile_num
     )
-    top_right_rlt, _ = auto_split_upscale(
+    top_right_rlt, _, current_tile_num = auto_split_upscale(
         top_right,
         upscale_function,
         scale=scale,
         overlap=overlap,
         max_depth=depth,
         current_depth=current_depth + 1,
+        current_tile_num=current_tile_num
     )
-    bottom_left_rlt, _ = auto_split_upscale(
+    bottom_left_rlt, _, current_tile_num = auto_split_upscale(
         bottom_left,
         upscale_function,
         scale=scale,
         overlap=overlap,
         max_depth=depth,
         current_depth=current_depth + 1,
+        current_tile_num=current_tile_num
     )
-    bottom_right_rlt, _ = auto_split_upscale(
+    bottom_right_rlt, _, current_tile_num = auto_split_upscale(
         bottom_right,
         upscale_function,
         scale=scale,
         overlap=overlap,
         max_depth=depth,
         current_depth=current_depth + 1,
+        current_tile_num=current_tile_num
     )
 
     # Define output shape
@@ -118,4 +127,4 @@ def auto_split_upscale(
         -out_h // 2 :, -out_w // 2 :, :
     ]
 
-    return output_img, depth
+    return output_img, depth, current_tile_num
