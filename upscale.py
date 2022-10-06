@@ -486,7 +486,7 @@ if __name__ == "__main__":
         reverse=args.reverse,
         skip_existing=args.skip_existing,
         delete_input=False,
-        seamless=args.seamless,
+        seamless=SeamlessOptions(args.seamless) if args.seamless != None else None,
         cpu=args.cpu,
         fp16=args.fp16,
         device_id=args.device_id,
@@ -495,6 +495,6 @@ if __name__ == "__main__":
         ternary_alpha=args.ternary_alpha,
         alpha_threshold=args.alpha_threshold,
         alpha_boundary_offset=args.alpha_boundary_offset,
-        alpha_mode=args.alpha_mode,
+        alpha_mode=AlphaOptions[AlphaOptions._member_names_[args.alpha_mode]],
     )
     upscale.run()
